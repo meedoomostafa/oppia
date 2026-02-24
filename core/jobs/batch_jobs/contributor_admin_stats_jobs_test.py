@@ -1678,6 +1678,23 @@ class GenerateContributorAdminStatsJobTests(ContributorDashboardTest):
 
         self.assertEqual(100, len(question_model.recent_review_outcomes))
 
+    def test_job_skips_stats_if_only_invalid_topics_exist(self) -> None:
+        self.translation_review_model_with_invalid_topic.update_timestamps()
+        self.question_review_model_with_invalid_topic.update_timestamps()
+        self.translation_contribution_model_with_invalid_topic.update_timestamps()
+        self.question_contribution_model_with_invalid_topic.update_timestamps()
+
+        self.put_multi(
+            [
+                self.translation_review_model_with_invalid_topic,
+                self.question_review_model_with_invalid_topic,
+                self.translation_contribution_model_with_invalid_topic,
+                self.question_contribution_model_with_invalid_topic,
+            ]
+        )
+
+        self.assert_job_output_is_empty()
+
     def test_skip_generation_if_users_are_deleted(self) -> None:
         suggestion_models.GeneralSuggestionModel(
             id=1,
@@ -1862,6 +1879,23 @@ class AuditGenerateContributorAdminStatsJobTests(ContributorDashboardTest):
                 ),
             ]
         )
+
+    def test_job_skips_stats_if_only_invalid_topics_exist(self) -> None:
+        self.translation_review_model_with_invalid_topic.update_timestamps()
+        self.question_review_model_with_invalid_topic.update_timestamps()
+        self.translation_contribution_model_with_invalid_topic.update_timestamps()
+        self.question_contribution_model_with_invalid_topic.update_timestamps()
+
+        self.put_multi(
+            [
+                self.translation_review_model_with_invalid_topic,
+                self.question_review_model_with_invalid_topic,
+                self.translation_contribution_model_with_invalid_topic,
+                self.question_contribution_model_with_invalid_topic,
+            ]
+        )
+
+        self.assert_job_output_is_empty()
 
     def test_skip_audit_if_users_are_deleted(self) -> None:
         suggestion_models.GeneralSuggestionModel(

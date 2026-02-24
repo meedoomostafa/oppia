@@ -304,6 +304,8 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
             >> beam.GroupByKey()
             | 'Transform translation reviewer stats'
             >> beam.MapTuple(self.transform_translation_review_stats)
+            | 'Filter total translation reviewer stats'
+            >> beam.Filter(lambda res: res is not None)
         )
 
         question_submitter_total_stats_model_results = (
@@ -352,6 +354,8 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
             >> beam.GroupByKey()
             | 'Transform question reviewer stats'
             >> beam.MapTuple(self.transform_question_review_stats)
+            | 'Filter total question reviewer stats'
+            >> beam.Filter(lambda res: res is not None)
         )
 
         if self.DATASTORE_UPDATES_ALLOWED:
@@ -507,11 +511,13 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
 
         entity_id = '%s.%s' % (language_code, contributor_user_id)
 
-        for stat in translation_contribution_stats:
-            if GenerateContributorAdminStatsJob.not_validate_topic(
+        translation_contribution_stats = [
+            stat
+            for stat in translation_contribution_stats
+            if not GenerateContributorAdminStatsJob.not_validate_topic(
                 stat.topic_id
-            ):
-                translation_contribution_stats.remove(stat)
+            )
+        ]
 
         if len(translation_contribution_stats) == 0:
             # No need to generate total contribution stats if there is no valid stats model.
@@ -605,7 +611,9 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
         translation_reviewer_stats: Iterable[
             suggestion_models.TranslationReviewStatsModel
         ],
-    ) -> suggestion_models.TranslationReviewerTotalContributionStatsModel:
+    ) -> Optional[
+        suggestion_models.TranslationReviewerTotalContributionStatsModel
+    ]:
         """Transforms TranslationReviewStatsModel to
         TranslationReviewerTotalContributionStatsModel.
 
@@ -618,21 +626,24 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
                 (language_code, reviewer_user_id).
 
         Returns:
-            suggestion_models
-            .TranslationReviewerTotalContributionStatsModel.
-            New TranslationReviewerTotalContributionStatsModel model.
+            Optional[suggestion_models.TranslationReviewerTotalContributionStatsModel].
+            New TranslationReviewerTotalContributionStatsModel model or None.
         """
 
-        translation_reviewer_stats = list(translation_reviewer_stats)
+        translation_reviewer_stats = [
+            stat
+            for stat in translation_reviewer_stats
+            if not GenerateContributorAdminStatsJob.not_validate_topic(
+                stat.topic_id
+            )
+        ]
+
+        if len(translation_reviewer_stats) == 0:
+            # No need to generate total contribution stats if there is no valid stats model.
+            return None
 
         language_code, reviewer_user_id = keys
         entity_id = '%s.%s' % (language_code, reviewer_user_id)
-
-        for stat in translation_reviewer_stats:
-            if GenerateContributorAdminStatsJob.not_validate_topic(
-                stat.topic_id
-            ):
-                translation_reviewer_stats.remove(stat)
 
         topic_ids = [v.topic_id for v in translation_reviewer_stats]
         reviewed_translations_count = sum(
@@ -756,11 +767,13 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
 
         entity_id = contributor_user_id
 
-        for stat in question_contribution_stats:
-            if GenerateContributorAdminStatsJob.not_validate_topic(
+        question_contribution_stats = [
+            stat
+            for stat in question_contribution_stats
+            if not GenerateContributorAdminStatsJob.not_validate_topic(
                 stat.topic_id
-            ):
-                question_contribution_stats.remove(stat)
+            )
+        ]
 
         if len(question_contribution_stats) == 0:
             # No need to generate total contribution stats if there is no valid stats model.
@@ -829,7 +842,9 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
         question_reviewer_stats: Iterable[
             suggestion_models.QuestionReviewStatsModel
         ],
-    ) -> suggestion_models.QuestionReviewerTotalContributionStatsModel:
+    ) -> Optional[
+        suggestion_models.QuestionReviewerTotalContributionStatsModel
+    ]:
         """Transforms QuestionReviewStatsModel to
         QuestionReviewerTotalContributionStatsModel.
 
@@ -841,11 +856,22 @@ class GenerateContributorAdminStatsJob(base_jobs.JobBase):
                 reviewer_user_id.
 
         Returns:
-            suggestion_models.QuestionReviewerTotalContributionStatsModel.
-            New QuestionReviewerTotalContributionStatsModel model.
+            Optional[suggestion_models.QuestionReviewerTotalContributionStatsModel].
+            New QuestionReviewerTotalContributionStatsModel model or None.
         """
 
-        question_reviewer_stats = list(question_reviewer_stats)
+        question_reviewer_stats = [
+            stat
+            for stat in question_reviewer_stats
+            if not GenerateContributorAdminStatsJob.not_validate_topic(
+                stat.topic_id
+            )
+        ]
+
+        if len(question_reviewer_stats) == 0:
+            # No need to generate total contribution stats if there is no valid stats model.
+            return None
+
         entity_id = reviewer_user_id
 
         topic_ids = [v.topic_id for v in question_reviewer_stats]
