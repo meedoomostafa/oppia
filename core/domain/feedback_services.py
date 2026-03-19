@@ -478,6 +478,52 @@ def _get_threads_user_info_keys(
         return []
 
 
+def _clean_unsent_feedback_email_references_for_threads(
+    thread_ids: List[str],
+) -> None:
+    """Removes queued email references for threads that are being deleted.
+
+    When feedback threads are deleted, any pending email notifications that
+    reference those threads should also be cleaned up. This function scans
+    all UnsentFeedbackEmailModel instances and removes references to the
+    specified threads. If an UnsentFeedbackEmailModel has no remaining
+    references after cleanup, it is deleted entirely.
+
+    This prevents orphaned references that would cause email sending to fail
+    when the referenced thread/message no longer exists.
+
+    Args:
+        thread_ids: list(str). The IDs of threads being deleted.
+    """
+    if not thread_ids:
+        return
+
+    thread_id_set = set(thread_ids)
+
+    # Scan all UnsentFeedbackEmailModel instances and clean up references
+    # to the deleted threads.
+    for model in feedback_models.UnsentFeedbackEmailModel.get_all():
+        original_count = len(model.feedback_message_references)
+        updated_references = [
+            ref
+            for ref in model.feedback_message_references
+            if ref['thread_id'] not in thread_id_set
+        ]
+
+        if len(updated_references) == original_count:
+            # No change needed for this model.
+            continue
+
+        if not updated_references:
+            # All references were to deleted threads, delete the model.
+            model.delete()
+        else:
+            # Some references remain, update the model.
+            model.feedback_message_references = updated_references
+            model.update_timestamps()
+            model.put()
+
+
 def delete_threads_for_multiple_entities(
     entity_type: str, entity_ids: List[str]
 ) -> None:
@@ -496,6 +542,11 @@ def delete_threads_for_multiple_entities(
         entity_threads = get_threads(entity_type, entity_id)
         threads.extend(entity_threads)
         thread_ids.extend(thread.id for thread in entity_threads)
+
+    # Clean up any pending email references to the threads being deleted.
+    # This must be done BEFORE deleting the threads to prevent orphaned
+    # references that would cause email sending to fail.
+    _clean_unsent_feedback_email_references_for_threads(thread_ids)
 
     model_keys = []
 

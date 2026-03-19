@@ -38,7 +38,7 @@ MYPY = False
 if MYPY:  # pragma: no cover
     from mypy_imports import feedback_models, suggestion_models
 
-(feedback_models, suggestion_models) = models.Registry.import_models(
+feedback_models, suggestion_models = models.Registry.import_models(
     [models.Names.FEEDBACK, models.Names.SUGGESTION]
 )
 
@@ -202,6 +202,186 @@ class FeedbackServicesUnitTests(test_utils.EmailTestBase):
         )
         self.assertIsNone(
             feedback_models.FeedbackAnalyticsModel.get_by_id(self.EXP_1_ID)
+        )
+
+    def test_delete_threads_cleans_up_unsent_email_references(
+        self,
+    ) -> None:
+        """Test that delete_threads_for_multiple_entities cleans up
+        UnsentFeedbackEmailModel references when threads are deleted.
+
+        This verifies the fix for GitHub issue #14966.
+        """
+        # Create an exploration with an owner who will receive feedback emails.
+        owner_email = 'owner@example.com'
+        owner_username = 'owner'
+        self.signup(owner_email, owner_username)
+        owner_id = self.get_user_id_from_email(owner_email)
+        exp_id = 'exp_for_email_test'
+        self.save_new_default_exploration(exp_id, owner_id)
+
+        # Create a feedback thread directly.
+        feedback_services.create_thread(
+            feconf.ENTITY_TYPE_EXPLORATION,
+            exp_id,
+            self.user_id,
+            'Test subject',
+            'Test feedback message',
+        )
+
+        # Get the thread ID.
+        threads = feedback_services.get_threads(
+            feconf.ENTITY_TYPE_EXPLORATION, exp_id
+        )
+        self.assertEqual(len(threads), 1)
+        thread_id = threads[0].id
+
+        # Manually create an UnsentFeedbackEmailModel to simulate the state
+        # after feedback is received but before email is sent.
+        # This is what happens in production when a user receives feedback.
+        feedback_message_reference = {
+            'entity_type': feconf.ENTITY_TYPE_EXPLORATION,
+            'entity_id': exp_id,
+            'thread_id': thread_id,
+            'message_id': 0,
+        }
+        unsent_email_model = feedback_models.UnsentFeedbackEmailModel(
+            id=owner_id,
+            feedback_message_references=[feedback_message_reference],
+        )
+        unsent_email_model.update_timestamps()
+        unsent_email_model.put()
+
+        # Verify the UnsentFeedbackEmailModel was created with the reference.
+        unsent_email_model = feedback_models.UnsentFeedbackEmailModel.get(
+            owner_id, strict=False
+        )
+        self.assertIsNotNone(unsent_email_model)
+        # Ruling out the possibility of None for mypy type checking.
+        assert unsent_email_model is not None
+        self.assertEqual(len(unsent_email_model.feedback_message_references), 1)
+
+        # Verify the thread exists.
+        thread = feedback_models.GeneralFeedbackThreadModel.get_by_id(thread_id)
+        self.assertIsNotNone(thread)
+
+        # Now delete the threads for this exploration.
+        feedback_services.delete_threads_for_multiple_entities(
+            feconf.ENTITY_TYPE_EXPLORATION, [exp_id]
+        )
+
+        # Verify the thread is deleted.
+        thread = feedback_models.GeneralFeedbackThreadModel.get_by_id(thread_id)
+        self.assertIsNone(thread)
+
+        # FIXED: The UnsentFeedbackEmailModel should be deleted since all its
+        # references pointed to the deleted thread.
+        unsent_email_model = feedback_models.UnsentFeedbackEmailModel.get(
+            owner_id, strict=False
+        )
+        self.assertIsNone(unsent_email_model)
+
+    def test_delete_threads_partial_cleanup_preserves_other_references(
+        self,
+    ) -> None:
+        """Test that delete_threads_for_multiple_entities only removes
+        references to deleted threads, preserving references to other threads.
+
+        This verifies the fix for GitHub issue #14966 handles partial cleanup.
+        """
+        # Create two explorations with an owner who will receive feedback.
+        owner_email = 'owner2@example.com'
+        owner_username = 'owner2'
+        self.signup(owner_email, owner_username)
+        owner_id = self.get_user_id_from_email(owner_email)
+        exp_id_1 = 'exp_partial_test_1'
+        exp_id_2 = 'exp_partial_test_2'
+        self.save_new_default_exploration(exp_id_1, owner_id)
+        self.save_new_default_exploration(exp_id_2, owner_id)
+
+        # Create feedback threads on both explorations.
+        feedback_services.create_thread(
+            feconf.ENTITY_TYPE_EXPLORATION,
+            exp_id_1,
+            self.user_id,
+            'Subject 1',
+            'Feedback on exp 1',
+        )
+        feedback_services.create_thread(
+            feconf.ENTITY_TYPE_EXPLORATION,
+            exp_id_2,
+            self.user_id,
+            'Subject 2',
+            'Feedback on exp 2',
+        )
+
+        # Get the thread IDs.
+        threads_1 = feedback_services.get_threads(
+            feconf.ENTITY_TYPE_EXPLORATION, exp_id_1
+        )
+        threads_2 = feedback_services.get_threads(
+            feconf.ENTITY_TYPE_EXPLORATION, exp_id_2
+        )
+        self.assertEqual(len(threads_1), 1)
+        self.assertEqual(len(threads_2), 1)
+        thread_id_1 = threads_1[0].id
+        thread_id_2 = threads_2[0].id
+
+        # Create an UnsentFeedbackEmailModel with references to BOTH threads.
+        feedback_message_reference_1 = {
+            'entity_type': feconf.ENTITY_TYPE_EXPLORATION,
+            'entity_id': exp_id_1,
+            'thread_id': thread_id_1,
+            'message_id': 0,
+        }
+        feedback_message_reference_2 = {
+            'entity_type': feconf.ENTITY_TYPE_EXPLORATION,
+            'entity_id': exp_id_2,
+            'thread_id': thread_id_2,
+            'message_id': 0,
+        }
+        unsent_email_model = feedback_models.UnsentFeedbackEmailModel(
+            id=owner_id,
+            feedback_message_references=[
+                feedback_message_reference_1,
+                feedback_message_reference_2,
+            ],
+        )
+        unsent_email_model.update_timestamps()
+        unsent_email_model.put()
+
+        # Verify initial state: 2 references.
+        unsent_email_model = feedback_models.UnsentFeedbackEmailModel.get(
+            owner_id, strict=False
+        )
+        self.assertIsNotNone(unsent_email_model)
+        assert unsent_email_model is not None
+        self.assertEqual(len(unsent_email_model.feedback_message_references), 2)
+
+        # Delete only the first exploration's threads.
+        feedback_services.delete_threads_for_multiple_entities(
+            feconf.ENTITY_TYPE_EXPLORATION, [exp_id_1]
+        )
+
+        # Verify thread 1 is deleted, thread 2 still exists.
+        self.assertIsNone(
+            feedback_models.GeneralFeedbackThreadModel.get_by_id(thread_id_1)
+        )
+        self.assertIsNotNone(
+            feedback_models.GeneralFeedbackThreadModel.get_by_id(thread_id_2)
+        )
+
+        # FIXED: The UnsentFeedbackEmailModel should still exist but only
+        # contain the reference to thread 2.
+        unsent_email_model = feedback_models.UnsentFeedbackEmailModel.get(
+            owner_id, strict=False
+        )
+        self.assertIsNotNone(unsent_email_model)
+        assert unsent_email_model is not None
+        self.assertEqual(len(unsent_email_model.feedback_message_references), 1)
+        self.assertEqual(
+            unsent_email_model.feedback_message_references[0]['thread_id'],
+            thread_id_2,
         )
 
     def test_status_of_newly_created_thread_is_open(self) -> None:
